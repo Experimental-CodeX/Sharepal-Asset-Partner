@@ -644,12 +644,18 @@ tbody tr:hover td { background: #f9faff; }
         </div>
         <!-- Admin-only contact info -->
         <div id="modal-contact" style="display:none;padding:14px 24px;background:#fafbff;border-bottom:1px solid var(--border);gap:24px;flex-wrap:wrap;align-items:center"></div>
-        <div id="modal-stats" style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid var(--border)"></div>
+        <div id="modal-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:0;border-bottom:1px solid var(--border)"></div>
         <div style="padding:20px 24px">
-          <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Payout Schedule</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px" id="modal-table-title">Payout Schedule</div>
+            <div style="display:flex;gap:6px;background:var(--mist);padding:3px;border-radius:100px">
+              <button type="button" id="modal-view-payouts" class="btn-agr" style="padding:6px 14px;font-size:11px;border-radius:100px;border:none;background:var(--blue);color:#fff" onclick="switchModalView('payouts')">Payout Schedule</button>
+              <button type="button" id="modal-view-amort" class="btn-agr" style="padding:6px 14px;font-size:11px;border-radius:100px;border:none;background:transparent;color:var(--muted)" onclick="switchModalView('amort')">Amortization Table</button>
+            </div>
+          </div>
           <div style="overflow-x:auto">
             <table style="width:100%;border-collapse:collapse">
-              <thead>
+              <thead id="modal-thead">
                 <tr>
                   <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">#</th>
                   <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Due date</th>
@@ -661,6 +667,7 @@ tbody tr:hover td { background: #f9faff; }
                 </tr>
               </thead>
               <tbody id="modal-tbody"></tbody>
+              <tfoot id="modal-tfoot"></tfoot>
             </table>
           </div>
         </div>
@@ -822,6 +829,9 @@ let ALL_PAYOUTS   = [];
 let ALL_PARTNERS  = [];
 let ALL_AGREEMENTS = [];
 let USER_ROLES = []; // [{username, role}] — for "Waiting on: <name>" labels
+let MODAL_PARTNER  = null; // currently open deal, for amortization toggle
+let MODAL_PAYOUTS  = [];   // that deal's payouts, cached for re-render on toggle
+let MODAL_VIEW     = "payouts"; // "payouts" | "amort"
 const TODAY = new Date();
 TODAY.setHours(0, 0, 0, 0);
 
@@ -864,6 +874,63 @@ function calcInterestRate(p) {
   } else {
     return (p.monthly * 12 / p.invested * 100).toFixed(2);
   }
+}
+
+// ── AMORTIZATION SCHEDULE ─────────────────────────────────────────────────
+// Breaks each payout for a deal into principal vs. interest components and
+// tracks the outstanding principal balance across the life of the deal.
+//  • EMI            → reducing-balance schedule (interest = balance × monthly rate)
+//  • Flat / Yearly   → interest-only each period, principal returned in full
+//                      on the payout that already carries `includesPrincipal`
+//  • Lump Sum        → single row: principal out at start, principal + all
+//                      accrued interest back at maturity
+function buildAmortizationSchedule(p, payouts) {
+  if (!p || !payouts || !payouts.length) return [];
+  const sorted = [...payouts].sort((a, b) => a.payoutNum - b.payoutNum);
+  const isEmi     = p.payType && p.payType.toLowerCase().includes("emi");
+  const isLumpSum = p.model && p.model.toLowerCase().includes("lump");
+  const principalStart = Math.round(p.invested);
+
+  if (isLumpSum) {
+    const pay = sorted[sorted.length - 1];
+    const interest = Math.round(pay.amount) - principalStart;
+    return [{
+      payoutNum: pay.payoutNum, totalPayouts: pay.totalPayouts || 1, dueDate: pay.dueDate,
+      opening: principalStart, principal: principalStart, interest, payment: Math.round(pay.amount), closing: 0,
+    }];
+  }
+
+  const rows = [];
+  let balance = principalStart;
+  const rateAnnual = isEmi ? parseFloat(calcInterestRate(p)) || 0 : 0;
+  const rMonthly = rateAnnual / 12 / 100;
+
+  sorted.forEach((pay, idx) => {
+    const isLastRow = idx === sorted.length - 1;
+    let interest, principal;
+    if (isEmi) {
+      interest = balance * rMonthly;
+      principal = Math.round(pay.amount) - interest;
+    } else {
+      // Flat / Yearly: interest-only, principal returned with the payout
+      // already flagged as including it (typically the final payout).
+      principal = pay.includesPrincipal ? balance : 0;
+      interest = Math.round(pay.amount) - principal;
+    }
+    if (isLastRow) {
+      // Force the schedule to fully amortize, absorbing any rounding drift.
+      principal = balance;
+      interest = Math.round(pay.amount) - principal;
+    }
+    const closing = Math.max(0, Math.round(balance - principal));
+    rows.push({
+      payoutNum: pay.payoutNum, totalPayouts: pay.totalPayouts || sorted.length, dueDate: pay.dueDate,
+      opening: Math.round(balance), principal: Math.round(principal), interest: Math.round(interest),
+      payment: Math.round(pay.amount), closing,
+    });
+    balance = closing;
+  });
+  return rows;
 }
 
 function calcInterestRateBadge(p) {
@@ -1931,8 +1998,19 @@ function openPartnerModal(partnerId) {
 
   const totalObligation = payouts.reduce((a, x) => a + x.amount, 0);
   const rateStr = calcInterestRate(p);
+
+  // Outstanding principal = invested amount minus principal already returned
+  // via payouts that have actually been marked Processed (not merely due/upcoming).
+  const amortSchedule = buildAmortizationSchedule(p, payouts);
+  const principalReturned = amortSchedule.reduce((sum, row) => {
+    const matchingPay = payouts.find(x => x.payoutNum === row.payoutNum) || {};
+    return sum + (getComputedStatus(matchingPay) === "processed" ? row.principal : 0);
+  }, 0);
+  const outstandingPrincipal = Math.max(0, Math.round(p.invested) - principalReturned);
+
   document.getElementById("modal-stats").innerHTML = [
     { label: "Invested", val: fmtINR(p.invested), sub: "" },
+    { label: "Outstanding principal", val: fmtINR(outstandingPrincipal), sub: outstandingPrincipal === 0 ? "fully returned" : "as of processed payouts" },
     { label: p.model==="Yearly" ? "Yearly payout" : p.model==="Lump Sum" ? "Final Payout" : "Monthly payout", val: p.model==="Lump Sum" ? fmtINR(p.monthly) : fmtINR(p.monthly), sub: rateStr ? rateStr + "% p.a." : "" },
     { label: "Total payout", val: fmtINR(totalObligation), sub: p.payType || "" },
     { label: "Paid out", val: processed + "/" + payouts.length, sub: fmtINR(totalSent) + " sent" },
@@ -1943,10 +2021,51 @@ function openPartnerModal(partnerId) {
     ${s.sub ? `<div style="font-size:11px;color:${s.danger?"var(--danger)":"var(--muted)"};margin-top:2px">${s.sub}</div>` : ""}
   </div>`).join("");
 
+  MODAL_PARTNER = p;
+  MODAL_PAYOUTS = payouts;
+  MODAL_VIEW = "payouts";
+  renderModalPayoutsView();
+  setModalToggleStyles();
+
+  document.getElementById("partner-modal-bg").style.display = "block";
+  document.body.style.overflow = "hidden";
+}
+
+function switchModalView(view) {
+  if (!MODAL_PARTNER) return;
+  MODAL_VIEW = view;
+  setModalToggleStyles();
+  if (view === "payouts") renderModalPayoutsView();
+  else renderModalAmortView();
+}
+
+function setModalToggleStyles() {
+  const btnP = document.getElementById("modal-view-payouts");
+  const btnA = document.getElementById("modal-view-amort");
+  const title = document.getElementById("modal-table-title");
+  if (!btnP || !btnA) return;
+  const active   = "padding:6px 14px;font-size:11px;border-radius:100px;border:none;background:var(--blue);color:#fff";
+  const inactive = "padding:6px 14px;font-size:11px;border-radius:100px;border:none;background:transparent;color:var(--muted)";
+  btnP.style.cssText = MODAL_VIEW === "payouts" ? active : inactive;
+  btnA.style.cssText = MODAL_VIEW === "amort"   ? active : inactive;
+  title.textContent = MODAL_VIEW === "payouts" ? "Payout Schedule" : "Amortization Table";
+}
+
+function renderModalPayoutsView() {
   const pillMap  = { overdue:"pill-overdue", due:"pill-due", processed:"pill-done", upcoming:"pill-upcoming" };
   const pillLabel = { overdue:"Overdue", due:"Due today", processed:"Processed", upcoming:"Upcoming" };
 
-  document.getElementById("modal-tbody").innerHTML = payouts.map(pay => {
+  document.getElementById("modal-thead").innerHTML = `<tr>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">#</th>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Due date</th>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Amount</th>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Status</th>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Transaction ID</th>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Processed on</th>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Marked by</th>
+  </tr>`;
+
+  document.getElementById("modal-tbody").innerHTML = MODAL_PAYOUTS.map(pay => {
     const s = getComputedStatus(pay);
     const txn = pay.transactionId ? `<span class="txn-code">${pay.transactionId}</span>` : `<span style="color:#ccc">—</span>`;
     const processedOnModal = pay.markedAt ? `<span style="font-size:12px;color:var(--muted)">${fmtDate(pay.markedAt)}</span>` : `<span style="color:#ccc">—</span>`;
@@ -1962,9 +2081,48 @@ function openPartnerModal(partnerId) {
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${by}</td>
     </tr>`;
   }).join("");
+  document.getElementById("modal-tfoot").innerHTML = "";
+}
 
-  document.getElementById("partner-modal-bg").style.display = "block";
-  document.body.style.overflow = "hidden";
+function renderModalAmortView() {
+  const schedule = buildAmortizationSchedule(MODAL_PARTNER, MODAL_PAYOUTS);
+
+  document.getElementById("modal-thead").innerHTML = `<tr>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">#</th>
+    <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Due date</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Opening balance</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Interest</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Principal</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Payout</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Closing balance</th>
+  </tr>`;
+
+  if (!schedule.length) {
+    document.getElementById("modal-tbody").innerHTML = `<tr><td colspan="7" style="padding:20px 12px;text-align:center;color:var(--muted)">No schedule available.</td></tr>`;
+    document.getElementById("modal-tfoot").innerHTML = "";
+    return;
+  }
+
+  document.getElementById("modal-tbody").innerHTML = schedule.map(r => `<tr>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;font-weight:600">#${r.payoutNum}/${r.totalPayouts}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${fmtDate(r.dueDate)}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace">${fmtINR(r.opening)}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--muted)">${fmtINR(r.interest)}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:${r.principal>0?'#1d4ed8':'var(--muted)'}">${fmtINR(r.principal)}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${fmtINR(r.payment)}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace">${fmtINR(r.closing)}</td>
+  </tr>`).join("");
+
+  const totalInterest  = schedule.reduce((a, r) => a + r.interest, 0);
+  const totalPrincipal = schedule.reduce((a, r) => a + r.principal, 0);
+  const totalPayment   = schedule.reduce((a, r) => a + r.payment, 0);
+  document.getElementById("modal-tfoot").innerHTML = `<tr style="background:var(--mist)">
+    <td colspan="3" style="padding:10px 12px;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted)">Total</td>
+    <td style="padding:10px 12px;text-align:right;font-weight:700;font-family:'JetBrains Mono',monospace">${fmtINR(totalInterest)}</td>
+    <td style="padding:10px 12px;text-align:right;font-weight:700;font-family:'JetBrains Mono',monospace;color:#1d4ed8">${fmtINR(totalPrincipal)}</td>
+    <td style="padding:10px 12px;text-align:right;font-weight:700">${fmtINR(totalPayment)}</td>
+    <td style="padding:10px 12px"></td>
+  </tr>`;
 }
 
 function closePartnerModal(e) {
