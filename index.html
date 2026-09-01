@@ -441,6 +441,9 @@ tbody tr:hover td { background: #f9faff; }
       <button class="tab" id="tab-partners" onclick="switchTab('partners')">
         👥 Deals
       </button>
+      <button class="tab" id="tab-assetpartners" onclick="switchTab('assetpartners')">
+        🧾 Asset Partners
+      </button>
       <button class="tab" id="tab-upcoming" onclick="switchTab('upcoming')">
         📅 Upcoming <span class="tab-badge zero" id="badge-upcoming">0</span>
       </button>
@@ -589,6 +592,105 @@ tbody tr:hover td { background: #f9faff; }
         </select>
       </div>
       <div class="partner-grid" id="partner-grid"></div>
+    </div>
+
+    <!-- ── ASSET PARTNERS TAB (person-level summary + TDS) ── -->
+    <div class="section" id="section-assetpartners">
+      <div class="stats-row" id="ap-summary-stats" style="margin-bottom:20px"></div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+        <div class="filter-row" style="margin-bottom:0">
+          <input type="text" id="ap-search" placeholder="Search partner name…" oninput="renderAssetPartners()" style="min-width:220px">
+          <select id="ap-tds-filter" onchange="renderAssetPartners()">
+            <option value="">All partners</option>
+            <option value="applicable">TDS applicable (current FY)</option>
+            <option value="approaching">Approaching threshold</option>
+            <option value="not_applicable">Below threshold</option>
+          </select>
+        </div>
+        <button class="btn-agr ghost" id="btn-tds-settings" onclick="openTdsSettingsModal()" style="display:none">⚙️ TDS Settings</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Asset Partner</th>
+              <th># Deals</th>
+              <th>Total Invested</th>
+              <th>Outstanding Principal</th>
+              <th>Interest Paid to Date</th>
+              <th>TDS Deducted to Date</th>
+              <th id="ap-fy-col-head">Current FY status</th>
+            </tr>
+          </thead>
+          <tbody id="ap-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── ASSET PARTNER DETAIL MODAL ── -->
+    <div id="ap-modal-bg" style="display:none;position:fixed;inset:0;background:rgba(3,13,49,0.55);z-index:100;overflow-y:auto;padding:32px 16px" onclick="closeAssetPartnerModal(event)">
+      <div id="ap-modal" style="background:#fff;border-radius:18px;max-width:920px;margin:0 auto;overflow:hidden;position:relative" onclick="event.stopPropagation()">
+        <div style="padding:22px 24px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px">
+          <div id="ap-modal-avatar" style="width:46px;height:46px;border-radius:50%;background:var(--blue);display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-size:14px;font-weight:800;color:#fff;flex-shrink:0"></div>
+          <div style="flex:1;min-width:0">
+            <div id="ap-modal-name" style="font-size:16px;font-weight:700;color:var(--ink)"></div>
+            <div id="ap-modal-meta" style="font-size:12px;color:var(--muted);margin-top:2px"></div>
+          </div>
+          <button onclick="closeAssetPartnerModal()" style="background:none;border:none;font-size:22px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1">×</button>
+        </div>
+        <div id="ap-modal-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:0;border-bottom:1px solid var(--border)"></div>
+        <div style="padding:20px 24px">
+          <div id="ap-modal-deals" style="margin-bottom:20px"></div>
+          <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Interest &amp; TDS Ledger (all deals, chronological)</div>
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse">
+              <thead>
+                <tr>
+                  <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">FY</th>
+                  <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Due date</th>
+                  <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Deal</th>
+                  <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Interest</th>
+                  <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Cum. interest (FY)</th>
+                  <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">FY threshold</th>
+                  <th style="text-align:center;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">TDS</th>
+                  <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Net payout</th>
+                </tr>
+              </thead>
+              <tbody id="ap-modal-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TDS SETTINGS MODAL (admin & finance_admin) ── -->
+    <div id="tds-settings-modal-bg" style="display:none;position:fixed;inset:0;background:rgba(3,13,49,0.55);z-index:110;overflow-y:auto;padding:32px 16px" onclick="closeTdsSettingsModal(event)">
+      <div style="background:#fff;border-radius:18px;max-width:520px;margin:0 auto;overflow:hidden;position:relative" onclick="event.stopPropagation()">
+        <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:16px;font-weight:700;color:var(--ink)">⚙️ TDS Settings</div>
+          <button onclick="closeTdsSettingsModal()" style="background:none;border:none;font-size:22px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1">×</button>
+        </div>
+        <div style="padding:20px 24px">
+          <label class="form-label">TDS rate (%)</label>
+          <input type="number" id="tds-rate-input" step="0.1" min="0" max="100" style="margin-bottom:18px" class="form-input">
+
+          <label class="form-label">Threshold by financial year</label>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">A future FY with no threshold set uses the most recent configured value.</div>
+          <div id="tds-threshold-rows" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+            <input type="text" id="tds-new-fy" placeholder="FY27-28" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+            <input type="number" id="tds-new-amount" placeholder="10000" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+            <button class="btn-agr ghost" onclick="addTdsThresholdRow()">+ Add FY</button>
+          </div>
+        </div>
+        <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px">
+          <button class="btn-agr ghost" onclick="closeTdsSettingsModal()">Cancel</button>
+          <button class="btn-agr primary" onclick="submitTdsSettings()">Save Settings</button>
+        </div>
+      </div>
     </div>
 
     <!-- ── AGREEMENTS TAB ── -->
@@ -832,15 +934,150 @@ let USER_ROLES = []; // [{username, role}] — for "Waiting on: <name>" labels
 let MODAL_PARTNER  = null; // currently open deal, for amortization toggle
 let MODAL_PAYOUTS  = [];   // that deal's payouts, cached for re-render on toggle
 let MODAL_VIEW     = "payouts"; // "payouts" | "amort"
+
+// ── TDS SETTINGS & ENGINE ──────────────────────────────────────────────────
+// TDS is evaluated per ASSET PARTNER (a person), not per deal — someone can
+// have multiple funding deals, and their interest income across ALL of them
+// is what gets checked against the FY threshold. Settings (rate + per-FY
+// thresholds, so future FYs can be configured ahead of time) are stored
+// locally and editable by admin/finance_admin via the TDS Settings modal.
+const TDS_SETTINGS_KEY    = "sp_tds_settings";
+const DEFAULT_TDS_RATE    = 10;   // % — Section 194A default for individuals
+const DEFAULT_TDS_THRESHOLD = 10000;
+let TDS_SETTINGS = { rate: DEFAULT_TDS_RATE, thresholds: {} }; // thresholds: { "FY26-27": 10000, ... }
+let PARTNER_GROUPS = {}; // normalized-name -> { key, name, deals:[...] }
+let TDS_LEDGERS    = {}; // group key -> chronological ledger entries w/ TDS applied
+
+function loadTdsSettings() {
+  try {
+    const raw = localStorage.getItem(TDS_SETTINGS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      TDS_SETTINGS = { rate: parsed.rate ?? DEFAULT_TDS_RATE, thresholds: parsed.thresholds || {} };
+    }
+  } catch (e) { /* use defaults */ }
+  if (!Object.keys(TDS_SETTINGS.thresholds).length) {
+    TDS_SETTINGS.thresholds[getFYLabel(TODAY)] = DEFAULT_TDS_THRESHOLD;
+  }
+}
+function saveTdsSettings() {
+  localStorage.setItem(TDS_SETTINGS_KEY, JSON.stringify(TDS_SETTINGS));
+}
+
+// Indian financial year: 1 Apr – 31 Mar. e.g. 15 Jun 2026 → "FY26-27".
+function getFYLabel(dateInput) {
+  const d = new Date(dateInput);
+  const y = d.getFullYear();
+  const startYear = d.getMonth() >= 3 ? y : y - 1; // getMonth() 3 = April
+  return "FY" + String(startYear).slice(-2) + "-" + String((startYear + 1)).slice(-2);
+}
+function fyLabelToStartYear(fy) {
+  const m = /FY(\d{2})-(\d{2})/.exec(fy || "");
+  return m ? 2000 + parseInt(m[1], 10) : null;
+}
+function nextFYLabel(fy) {
+  const y = fyLabelToStartYear(fy);
+  if (y == null) return fy;
+  return "FY" + String(y + 1).slice(-2) + "-" + String(y + 2).slice(-2);
+}
+// Threshold for a given FY — uses the configured value if present, otherwise
+// carries forward the most recent earlier FY's configured threshold so a
+// deal maturing in a not-yet-configured future FY still gets a sane value.
+function getTdsThreshold(fyLabel) {
+  if (TDS_SETTINGS.thresholds[fyLabel] != null) return TDS_SETTINGS.thresholds[fyLabel];
+  const target = fyLabelToStartYear(fyLabel);
+  let best = null, bestYear = -Infinity;
+  Object.keys(TDS_SETTINGS.thresholds).forEach(k => {
+    const y = fyLabelToStartYear(k);
+    if (y != null && y <= target && y > bestYear) { bestYear = y; best = TDS_SETTINGS.thresholds[k]; }
+  });
+  return best != null ? best : DEFAULT_TDS_THRESHOLD;
+}
+function getTdsRate() { return TDS_SETTINGS.rate ?? DEFAULT_TDS_RATE; }
+
+function normalizePartnerName(name) { return (name || "").trim().toLowerCase().replace(/\s+/g, " "); }
+
+function buildPartnerGroups() {
+  const groups = {};
+  ALL_PARTNERS.forEach(p => {
+    const key = normalizePartnerName(p.name);
+    if (!key) return;
+    if (!groups[key]) groups[key] = { key, name: p.name, deals: [] };
+    groups[key].deals.push(p);
+  });
+  return groups;
+}
+
+// Builds the full chronological interest ledger for ONE asset partner across
+// ALL of their deals, applying TDS once cumulative interest for a given FY
+// crosses that FY's threshold — from the crossing payout onward, not
+// retroactively on payouts already earned before the threshold was hit.
+function buildGroupTdsLedger(group) {
+  const entries = [];
+  group.deals.forEach(deal => {
+    const payouts  = ALL_PAYOUTS.filter(x => x.partnerId === deal.id);
+    const schedule = buildAmortizationSchedule(deal, payouts);
+    schedule.forEach(row => {
+      const payout = payouts.find(x => x.payoutNum === row.payoutNum) || {};
+      entries.push({
+        dealId: deal.id, dealName: deal.name, afpId: deal.afpId || deal.id,
+        payoutNum: row.payoutNum, totalPayouts: row.totalPayouts, dueDate: row.dueDate,
+        opening: row.opening, interest: row.interest, principal: row.principal,
+        payment: row.payment, closing: row.closing, status: getComputedStatus(payout),
+      });
+    });
+  });
+  entries.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  const cumByFY = {};
+  const rate = getTdsRate();
+  return entries.map(e => {
+    const fy = getFYLabel(e.dueDate);
+    const threshold = getTdsThreshold(fy);
+    cumByFY[fy] = (cumByFY[fy] || 0) + e.interest;
+    const tdsApplicable = cumByFY[fy] >= threshold;
+    const tdsAmount = tdsApplicable ? Math.round(e.interest * rate / 100) : 0;
+    return { ...e, fy, fyThreshold: threshold, cumInterestFY: cumByFY[fy], tdsApplicable, tdsAmount, netPayout: e.payment - tdsAmount };
+  });
+}
+
+function rebuildTdsData() {
+  _rateCache.clear();
+  _amortCache.clear();
+  PARTNER_GROUPS = buildPartnerGroups();
+  TDS_LEDGERS = {};
+  Object.values(PARTNER_GROUPS).forEach(g => { TDS_LEDGERS[g.key] = buildGroupTdsLedger(g); });
+}
+
+// TDS ledger rows for a single deal (still computed against that partner's
+// full cross-deal cumulative, then filtered down to just this deal).
+function getLedgerForDeal(dealId) {
+  const deal = ALL_PARTNERS.find(x => x.id === dealId);
+  if (!deal) return [];
+  const full = TDS_LEDGERS[normalizePartnerName(deal.name)] || [];
+  return full.filter(e => e.dealId === dealId);
+}
 const TODAY = new Date();
 TODAY.setHours(0, 0, 0, 0);
+loadTdsSettings();
 
 // ── UTILITIES ──
 // ── INTEREST RATE HELPERS ────────────────────────────────────────────────────
 // For EMI: solve for monthly rate r using Newton-Raphson on EMI formula.
 // EMI = P*r*(1+r)^n / ((1+r)^n - 1)  →  find r such that f(r)=0
 // For Flat/Yearly: direct formula (monthly payment IS pure interest).
+// Cached per deal id — this involves an iterative solve for EMI deals, and
+// is called from several places (deal cards, modal stats, amortization
+// builder, TDS ledger) so recomputing it every time was a real cost on
+// pages/refreshes with many deals. Cache is cleared in rebuildTdsData().
+const _rateCache = new Map();
 function calcInterestRate(p) {
+  if (p && p.id && _rateCache.has(p.id)) return _rateCache.get(p.id);
+  const result = calcInterestRateRaw(p);
+  if (p && p.id) _rateCache.set(p.id, result);
+  return result;
+}
+function calcInterestRateRaw(p) {
   if (!p.invested || !p.monthly) return null;
   const isEmi = p.payType && p.payType.toLowerCase().includes("emi");
   const P = p.invested, emi = p.monthly, n = p.tenure;
@@ -884,7 +1121,19 @@ function calcInterestRate(p) {
 //                      on the payout that already carries `includesPrincipal`
 //  • Lump Sum        → single row: principal out at start, principal + all
 //                      accrued interest back at maturity
+// Cached per deal id for the same reason as calcInterestRate above — this is
+// called repeatedly (deal modal, TDS ledger, asset-partner summaries) and
+// recomputing the full schedule (plus its own calcInterestRate call, before
+// caching) every time was the main source of the slow refreshes.
+const _amortCache = new Map();
 function buildAmortizationSchedule(p, payouts) {
+  if (!p) return [];
+  if (p.id && _amortCache.has(p.id)) return _amortCache.get(p.id);
+  const result = buildAmortizationScheduleRaw(p, payouts);
+  if (p.id) _amortCache.set(p.id, result);
+  return result;
+}
+function buildAmortizationScheduleRaw(p, payouts) {
   if (!p || !payouts || !payouts.length) return [];
   const sorted = [...payouts].sort((a, b) => a.payoutNum - b.payoutNum);
   const isEmi     = p.payType && p.payType.toLowerCase().includes("emi");
@@ -1120,12 +1369,14 @@ async function bootApp() {
   const tAction     = document.getElementById("tab-action");
   const tAll        = document.getElementById("tab-all");
   const tPartners   = document.getElementById("tab-partners");
+  const tAssetPartners = document.getElementById("tab-assetpartners");
   const tUpcoming   = document.getElementById("tab-upcoming");
   const tAgreements = document.getElementById("tab-agreements");
   // Detach all first (avoids innerHTML wipe destroying references)
-  [tAction, tAll, tPartners, tUpcoming, tAgreements].forEach(t => tabsEl.removeChild(t));
+  [tAction, tAll, tPartners, tAssetPartners, tUpcoming, tAgreements].forEach(t => tabsEl.removeChild(t));
   if (ROLE === "viewer" || ROLE === "sign") {
     tabsEl.appendChild(tPartners);
+    tabsEl.appendChild(tAssetPartners);
     tabsEl.appendChild(tAll);
     tabsEl.appendChild(tUpcoming);
     tabsEl.appendChild(tAgreements);
@@ -1135,10 +1386,15 @@ async function bootApp() {
     tabsEl.appendChild(tAction);
     tabsEl.appendChild(tAll);
     tabsEl.appendChild(tPartners);
+    tabsEl.appendChild(tAssetPartners);
     tabsEl.appendChild(tUpcoming);
     tabsEl.appendChild(tAgreements);
     switchTab("action");
   }
+
+  // TDS Settings — admin & finance_admin only
+  const btnTdsSettings = document.getElementById("btn-tds-settings");
+  if (btnTdsSettings) btnTdsSettings.style.display = (ROLE === "admin" || ROLE === "finance_admin") ? "inline-flex" : "none";
 
   // Show setup banner if not configured
   if (SCRIPT_URL === "YOUR_APPS_SCRIPT_URL_HERE") {
@@ -1213,12 +1469,14 @@ async function refreshData() {
       });
       ALL_AGREEMENTS = res.agreements || [];
       if (!USER_ROLES.length) await fetchUserRoles();
+      rebuildTdsData();
       renderAll();
       renderAction();
       renderStats();
       renderPartners();
       renderAgreements();
       renderUpcoming();
+      renderAssetPartners();
       updateBadges();
     } else {
       showToast("Failed to load data: " + res.error, "error");
@@ -1323,7 +1581,8 @@ function loadDemoData() {
     };
   });
 
-  renderAll(); renderAction(); renderStats(); renderPartners(); renderAgreements(); renderUpcoming(); updateBadges();
+  rebuildTdsData();
+  renderAll(); renderAction(); renderStats(); renderPartners(); renderAgreements(); renderUpcoming(); renderAssetPartners(); updateBadges();
 }
 
 // ── STATS ──
@@ -1939,6 +2198,214 @@ function renderPartners() {
   }).join("");
 }
 
+// Outstanding principal for one deal, counting only payouts actually marked
+// Processed (not just due/overdue/upcoming) as having returned principal.
+function computeOutstandingPrincipal(deal, payouts) {
+  const schedule = buildAmortizationSchedule(deal, payouts);
+  const principalReturned = schedule.reduce((sum, row) => {
+    const matchingPay = payouts.find(x => x.payoutNum === row.payoutNum) || {};
+    return sum + (getComputedStatus(matchingPay) === "processed" ? row.principal : 0);
+  }, 0);
+  return Math.max(0, Math.round(deal.invested) - principalReturned);
+}
+
+// ── ASSET PARTNERS TAB (person-level summary + TDS) ──
+function getAssetPartnerSummary(group) {
+  const ledger = TDS_LEDGERS[group.key] || [];
+  const currentFY = getFYLabel(TODAY);
+
+  // Derive totals straight from the already-built ledger (no re-filtering
+  // ALL_PAYOUTS or recomputing amortization schedules per deal here).
+  let totalInvested = 0, outstandingPrincipal = 0;
+  group.deals.forEach(deal => {
+    totalInvested += Math.round(deal.invested);
+    const principalReturned = ledger
+      .filter(e => e.dealId === deal.id && e.status === "processed")
+      .reduce((s, e) => s + e.principal, 0);
+    outstandingPrincipal += Math.max(0, Math.round(deal.invested) - principalReturned);
+  });
+
+  const interestPaidToDate = ledger.filter(e => e.status === "processed").reduce((a,e) => a+e.interest, 0);
+  const tdsDeductedToDate  = ledger.filter(e => e.status === "processed").reduce((a,e) => a+e.tdsAmount, 0);
+
+  const fyEntries   = ledger.filter(e => e.fy === currentFY);
+  const fyInterest  = fyEntries.reduce((a,e) => a+e.interest, 0);
+  const fyThreshold = getTdsThreshold(currentFY);
+  const fyApplicable = fyInterest >= fyThreshold;
+  const fyPct = fyThreshold ? Math.min(100, Math.round(fyInterest / fyThreshold * 100)) : 0;
+  const fyStatus = fyApplicable ? "applicable" : (fyPct >= 80 ? "approaching" : "not_applicable");
+
+  return { totalInvested, outstandingPrincipal, interestPaidToDate, tdsDeductedToDate, currentFY, fyInterest, fyThreshold, fyApplicable, fyPct, fyStatus, ledger };
+}
+
+function renderAssetPartners() {
+  const search = (document.getElementById("ap-search")?.value || "").toLowerCase();
+  const fyFilter = document.getElementById("ap-tds-filter")?.value || "";
+
+  // Compute each group's summary exactly once per render (it was previously
+  // being recomputed 2-3x per render — once for the table rows and again for
+  // each top-stat card — which was the main cause of slow renders/refreshes).
+  const allSummaries = Object.values(PARTNER_GROUPS).map(g => ({ group: g, summary: getAssetPartnerSummary(g) }));
+
+  let rows = allSummaries;
+  if (search) rows = rows.filter(r => r.group.name.toLowerCase().includes(search));
+  if (fyFilter) rows = rows.filter(r => r.summary.fyStatus === fyFilter);
+  rows = [...rows].sort((a,b) => b.summary.totalInvested - a.summary.totalInvested);
+
+  // Top summary stats — derived from the same allSummaries pass, not recomputed.
+  const totalFunding = allSummaries.reduce((a,r) => a+r.summary.totalInvested, 0);
+  const totalTdsAll = allSummaries.reduce((a,r) => a+r.summary.tdsDeductedToDate, 0);
+  const applicableCount = allSummaries.filter(r => r.summary.fyApplicable).length;
+  document.getElementById("ap-summary-stats").innerHTML = `
+    <div class="stat-card"><div class="stat-label">Asset partners</div><div class="stat-val">${allSummaries.length}</div><div class="stat-sub">${ALL_PARTNERS.length} total deals</div></div>
+    <div class="stat-card"><div class="stat-label">Total funding</div><div class="stat-val">${fmtINR(totalFunding)}</div><div class="stat-sub">across all deals</div></div>
+    <div class="stat-card"><div class="stat-label">TDS deducted to date</div><div class="stat-val">${fmtINR(totalTdsAll)}</div><div class="stat-sub">on processed payouts</div></div>
+    <div class="stat-card"><div class="stat-label">TDS applicable now (${getFYLabel(TODAY)})</div><div class="stat-val ${applicableCount?'red':''}">${applicableCount}</div><div class="stat-sub ${applicableCount?'red':''}">${applicableCount ? "partner"+(applicableCount>1?"s":"")+" over threshold" : "none over threshold"}</div></div>
+  `;
+
+  const tbody = document.getElementById("ap-tbody");
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:40px 12px;text-align:center;color:var(--muted)">No asset partners found.</td></tr>`;
+    return;
+  }
+
+  const fyBadge = (s) => {
+    if (s.fyApplicable) return `<span class="status-pill pill-overdue">TDS applicable</span>`;
+    if (s.fyStatus === "approaching") return `<span class="status-pill pill-due">Approaching (${s.fyPct}%)</span>`;
+    return `<span class="status-pill pill-upcoming">Below threshold</span>`;
+  };
+
+  tbody.innerHTML = rows.map(({group, summary}) => `
+    <tr style="cursor:pointer" onclick="openAssetPartnerModal('${group.key.replace(/'/g,"\\'")}')">
+      <td style="display:flex;align-items:center;gap:10px;padding-top:12px;padding-bottom:12px">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--blue);display:flex;align-items:center;justify-content:center;font-family:'Bricolage Grotesque',sans-serif;font-size:11px;font-weight:800;color:#fff;flex-shrink:0">${initials(group.name)}</div>
+        <span style="font-weight:600">${group.name}</span>
+      </td>
+      <td>${group.deals.length}</td>
+      <td>${fmtINR(summary.totalInvested)}</td>
+      <td>${fmtINR(summary.outstandingPrincipal)}</td>
+      <td>${fmtINR(summary.interestPaidToDate)}</td>
+      <td>${fmtINR(summary.tdsDeductedToDate)}</td>
+      <td>${fyBadge(summary)}</td>
+    </tr>
+  `).join("");
+}
+
+function openAssetPartnerModal(key) {
+  const group = PARTNER_GROUPS[key];
+  if (!group) return;
+  const summary = getAssetPartnerSummary(group);
+  const ledger = summary.ledger;
+
+  document.getElementById("ap-modal-avatar").textContent = initials(group.name);
+  document.getElementById("ap-modal-name").textContent = group.name;
+  document.getElementById("ap-modal-meta").textContent = `${group.deals.length} deal${group.deals.length>1?"s":""} · Current FY: ${summary.currentFY}`;
+
+  document.getElementById("ap-modal-stats").innerHTML = [
+    { label: "Total invested", val: fmtINR(summary.totalInvested) },
+    { label: "Outstanding principal", val: fmtINR(summary.outstandingPrincipal) },
+    { label: "Interest paid to date", val: fmtINR(summary.interestPaidToDate) },
+    { label: "TDS deducted to date", val: fmtINR(summary.tdsDeductedToDate) },
+    { label: summary.currentFY + " interest", val: fmtINR(summary.fyInterest), sub: "threshold " + fmtINR(summary.fyThreshold) },
+    { label: summary.currentFY + " TDS status", val: summary.fyApplicable ? "Applicable" : (summary.fyStatus==="approaching" ? "Approaching" : "Not yet"), danger: summary.fyApplicable },
+  ].map(s => `<div style="padding:14px 16px;border-right:1px solid var(--border)">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:3px">${s.label}</div>
+    <div style="font-size:17px;font-weight:700;font-family:'Bricolage Grotesque',sans-serif;color:${s.danger?"var(--danger)":"var(--ink)"}">${s.val}</div>
+    ${s.sub ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${s.sub}</div>` : ""}
+  </div>`).join("");
+
+  document.getElementById("ap-modal-deals").innerHTML = `
+    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Deals</div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${group.deals.map(d => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:var(--mist);border-radius:10px;cursor:pointer" onclick="closeAssetPartnerModal(); openPartnerModal('${d.id}')">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--ink)">${d.afpId || d.id}</div>
+            <div style="font-size:11px;color:var(--muted)">${d.model||"Monthly"} · ${d.tenure} months · started ${fmtDate(d.investDate)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:13px;font-weight:700">${fmtINR(d.invested)}</div>
+            <div style="font-size:11px;color:var(--blue)">View deal →</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  document.getElementById("ap-modal-tbody").innerHTML = ledger.map(e => `
+    <tr>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;font-family:'JetBrains Mono',monospace;font-size:12px">${e.fy}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa">${fmtDate(e.dueDate)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;font-size:12px;color:var(--muted)">${e.afpId} <span style="color:#ccc">·</span> #${e.payoutNum}/${e.totalPayouts}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace">${fmtINR(e.interest)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--muted)">${fmtINR(e.cumInterestFY)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--muted)">${fmtINR(e.fyThreshold)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${e.tdsApplicable ? `<span style="font-size:10px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px">${fmtINR(e.tdsAmount)}</span>` : `<span style="color:#ccc;font-size:12px">—</span>`}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${fmtINR(e.netPayout)}</td>
+    </tr>
+  `).join("");
+
+  document.getElementById("ap-modal-bg").style.display = "block";
+  document.body.style.overflow = "hidden";
+}
+
+function closeAssetPartnerModal(e) {
+  if (e && e.target !== document.getElementById("ap-modal-bg")) return;
+  document.getElementById("ap-modal-bg").style.display = "none";
+  document.body.style.overflow = "";
+}
+
+// ── TDS SETTINGS MODAL ──
+function openTdsSettingsModal() {
+  if (ROLE !== "admin" && ROLE !== "finance_admin") return;
+  document.getElementById("tds-rate-input").value = getTdsRate();
+  renderTdsThresholdRows();
+  document.getElementById("tds-new-fy").value = "";
+  document.getElementById("tds-new-amount").value = "";
+  document.getElementById("tds-settings-modal-bg").style.display = "block";
+  document.body.style.overflow = "hidden";
+}
+function closeTdsSettingsModal(e) {
+  if (e && e.target !== document.getElementById("tds-settings-modal-bg")) return;
+  document.getElementById("tds-settings-modal-bg").style.display = "none";
+  document.body.style.overflow = "";
+}
+function renderTdsThresholdRows() {
+  const fyLabels = Object.keys(TDS_SETTINGS.thresholds).sort((a,b) => fyLabelToStartYear(a) - fyLabelToStartYear(b));
+  const wrap = document.getElementById("tds-threshold-rows");
+  if (!fyLabels.length) { wrap.innerHTML = `<div style="font-size:12px;color:var(--muted)">No thresholds configured yet.</div>`; return; }
+  wrap.innerHTML = fyLabels.map(fy => `
+    <div style="display:flex;gap:8px;align-items:center">
+      <span style="flex:1;font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace">${fy}</span>
+      <input type="number" value="${TDS_SETTINGS.thresholds[fy]}" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px" onchange="TDS_SETTINGS.thresholds['${fy}']=parseFloat(this.value)||0">
+      <button class="asset-row-remove" title="Remove" onclick="delete TDS_SETTINGS.thresholds['${fy}']; renderTdsThresholdRows()">×</button>
+    </div>
+  `).join("");
+}
+function addTdsThresholdRow() {
+  const fyInput = document.getElementById("tds-new-fy");
+  const amtInput = document.getElementById("tds-new-amount");
+  let fy = fyInput.value.trim();
+  const amt = parseFloat(amtInput.value);
+  if (!fy) { showToast("Enter an FY label, e.g. FY27-28", "error"); return; }
+  if (!/^FY\d{2}-\d{2}$/i.test(fy)) { showToast("FY format should look like FY27-28", "error"); return; }
+  fy = "FY" + fy.slice(2);
+  if (!amt && amt !== 0) { showToast("Enter a threshold amount", "error"); return; }
+  TDS_SETTINGS.thresholds[fy] = amt;
+  fyInput.value = ""; amtInput.value = "";
+  renderTdsThresholdRows();
+}
+function submitTdsSettings() {
+  const rate = parseFloat(document.getElementById("tds-rate-input").value);
+  TDS_SETTINGS.rate = isNaN(rate) ? DEFAULT_TDS_RATE : rate;
+  saveTdsSettings();
+  rebuildTdsData();
+  closeTdsSettingsModal();
+  renderAssetPartners();
+  if (MODAL_PARTNER) { MODAL_PAYOUTS = ALL_PAYOUTS.filter(x => x.partnerId === MODAL_PARTNER.id); (MODAL_VIEW === "amort" ? renderModalAmortView : renderModalPayoutsView)(); }
+  showToast("TDS settings saved ✓");
+}
+
 // ── AGREEMENT LINK ──
 // Same-repo relative path — adjust AGREEMENT_PATH if agreement.html lives elsewhere
 const AGREEMENT_PATH = "agreement.html";
@@ -2001,12 +2468,7 @@ function openPartnerModal(partnerId) {
 
   // Outstanding principal = invested amount minus principal already returned
   // via payouts that have actually been marked Processed (not merely due/upcoming).
-  const amortSchedule = buildAmortizationSchedule(p, payouts);
-  const principalReturned = amortSchedule.reduce((sum, row) => {
-    const matchingPay = payouts.find(x => x.payoutNum === row.payoutNum) || {};
-    return sum + (getComputedStatus(matchingPay) === "processed" ? row.principal : 0);
-  }, 0);
-  const outstandingPrincipal = Math.max(0, Math.round(p.invested) - principalReturned);
+  const outstandingPrincipal = computeOutstandingPrincipal(p, payouts);
 
   document.getElementById("modal-stats").innerHTML = [
     { label: "Invested", val: fmtINR(p.invested), sub: "" },
@@ -2054,11 +2516,15 @@ function setModalToggleStyles() {
 function renderModalPayoutsView() {
   const pillMap  = { overdue:"pill-overdue", due:"pill-due", processed:"pill-done", upcoming:"pill-upcoming" };
   const pillLabel = { overdue:"Overdue", due:"Due today", processed:"Processed", upcoming:"Upcoming" };
+  const ledger = getLedgerForDeal(MODAL_PARTNER.id);
+  const ledgerByNum = {}; ledger.forEach(e => { ledgerByNum[e.payoutNum] = e; });
 
   document.getElementById("modal-thead").innerHTML = `<tr>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">#</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Due date</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Amount</th>
+    <th style="text-align:center;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">TDS</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Net payout</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Status</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Transaction ID</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Processed on</th>
@@ -2071,10 +2537,15 @@ function renderModalPayoutsView() {
     const processedOnModal = pay.markedAt ? `<span style="font-size:12px;color:var(--muted)">${fmtDate(pay.markedAt)}</span>` : `<span style="color:#ccc">—</span>`;
     const by  = pay.markedBy ? `<span style="font-size:11px;color:var(--muted)">${pay.markedBy}</span>` : `<span style="color:#ccc">—</span>`;
     const rowBg = s === "overdue" ? "background:#fff5f5" : s === "due" ? "background:#fffbeb" : s === "processed" ? "background:#f0fdf4" : "";
+    const led = ledgerByNum[pay.payoutNum];
+    const tdsCell = led && led.tdsApplicable ? `<span style="font-size:10px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px">${fmtINR(led.tdsAmount)}</span>` : `<span style="color:#ccc;font-size:12px">—</span>`;
+    const netCell = led ? fmtINR(led.netPayout) : fmtINR(pay.amount);
     return `<tr style="${rowBg}">
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;font-weight:600">#${pay.payoutNum}/${pay.totalPayouts||pay.tenure}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${fmtDate(pay.dueDate)}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;font-weight:600">${fmtINR(pay.amount)}${pay.includesPrincipal ? `<span style="font-size:10px;font-weight:700;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle">+Principal</span>` : ""}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${tdsCell}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${netCell}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa"><span class="status-pill ${pillMap[s]}">${pillLabel[s]}</span></td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${txn}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${processedOnModal}</td>
@@ -2085,7 +2556,7 @@ function renderModalPayoutsView() {
 }
 
 function renderModalAmortView() {
-  const schedule = buildAmortizationSchedule(MODAL_PARTNER, MODAL_PAYOUTS);
+  const schedule = getLedgerForDeal(MODAL_PARTNER.id); // already interest/principal/TDS decomposed, in order
 
   document.getElementById("modal-thead").innerHTML = `<tr>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">#</th>
@@ -2094,11 +2565,13 @@ function renderModalAmortView() {
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Interest</th>
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Principal</th>
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Payout</th>
+    <th style="text-align:center;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">TDS</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Net payout</th>
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Closing balance</th>
   </tr>`;
 
   if (!schedule.length) {
-    document.getElementById("modal-tbody").innerHTML = `<tr><td colspan="7" style="padding:20px 12px;text-align:center;color:var(--muted)">No schedule available.</td></tr>`;
+    document.getElementById("modal-tbody").innerHTML = `<tr><td colspan="9" style="padding:20px 12px;text-align:center;color:var(--muted)">No schedule available.</td></tr>`;
     document.getElementById("modal-tfoot").innerHTML = "";
     return;
   }
@@ -2110,17 +2583,23 @@ function renderModalAmortView() {
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--muted)">${fmtINR(r.interest)}</td>
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:${r.principal>0?'#1d4ed8':'var(--muted)'}">${fmtINR(r.principal)}</td>
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${fmtINR(r.payment)}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${r.tdsApplicable ? `<span style="font-size:10px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px">${fmtINR(r.tdsAmount)}</span>` : `<span style="color:#ccc;font-size:12px">—</span>`}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${fmtINR(r.netPayout)}</td>
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace">${fmtINR(r.closing)}</td>
   </tr>`).join("");
 
   const totalInterest  = schedule.reduce((a, r) => a + r.interest, 0);
   const totalPrincipal = schedule.reduce((a, r) => a + r.principal, 0);
   const totalPayment   = schedule.reduce((a, r) => a + r.payment, 0);
+  const totalTds       = schedule.reduce((a, r) => a + r.tdsAmount, 0);
+  const totalNet       = schedule.reduce((a, r) => a + r.netPayout, 0);
   document.getElementById("modal-tfoot").innerHTML = `<tr style="background:var(--mist)">
     <td colspan="3" style="padding:10px 12px;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted)">Total</td>
     <td style="padding:10px 12px;text-align:right;font-weight:700;font-family:'JetBrains Mono',monospace">${fmtINR(totalInterest)}</td>
     <td style="padding:10px 12px;text-align:right;font-weight:700;font-family:'JetBrains Mono',monospace;color:#1d4ed8">${fmtINR(totalPrincipal)}</td>
     <td style="padding:10px 12px;text-align:right;font-weight:700">${fmtINR(totalPayment)}</td>
+    <td style="padding:10px 12px;text-align:center;font-weight:700;color:#b91c1c">${fmtINR(totalTds)}</td>
+    <td style="padding:10px 12px;text-align:right;font-weight:700">${fmtINR(totalNet)}</td>
     <td style="padding:10px 12px"></td>
   </tr>`;
 }
@@ -2289,12 +2768,13 @@ async function submitAddPartner() {
 
 // ── TABS ──
 function switchTab(name) {
-  ["action","all","partners","upcoming","agreements"].forEach(n => {
+  ["action","all","partners","assetpartners","upcoming","agreements"].forEach(n => {
     document.getElementById("tab-"+n).classList.toggle("active", n===name);
     document.getElementById("section-"+n).classList.toggle("active", n===name);
   });
   if (name === "all") renderAll();
   if (name === "partners") renderPartners();
+  if (name === "assetpartners") renderAssetPartners();
   if (name === "agreements") renderAgreements();
   if (name === "upcoming") renderUpcoming();
 }
