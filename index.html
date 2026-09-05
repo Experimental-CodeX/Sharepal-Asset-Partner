@@ -260,7 +260,7 @@ a { text-decoration: none; color: inherit; }
 .pill-upcoming { background: var(--info-bg); color: var(--info-text); }
 
 .ac-form { border-top: 1px solid var(--border); padding: 14px 18px; background: #fafbff; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
-.ac-form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px; }
+.ac-form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px; position: relative; }
 .ac-form-group label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
 .ac-form-group input, .ac-form-group textarea {
   padding: 9px 12px; border: 1.5px solid var(--border); border-radius: var(--radius);
@@ -269,7 +269,7 @@ a { text-decoration: none; color: inherit; }
 }
 .ac-form-group input:focus, .ac-form-group textarea:focus { outline: none; border-color: var(--blue); }
 .ac-form-group input.error { border-color: var(--danger); }
-.ac-form-error { font-size: 11px; color: var(--danger); margin-top: 2px; }
+.ac-form-error { font-size: 11px; color: var(--danger); position: absolute; top: 100%; left: 0; margin-top: 2px; white-space: nowrap; }
 .btn-process {
   padding: 10px 20px; background: var(--blue); color: #fff; border: none;
   border-radius: var(--radius); font-family: 'Bricolage Grotesque', sans-serif;
@@ -656,6 +656,7 @@ tbody tr:hover td { background: #f9faff; }
                   <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">FY threshold</th>
                   <th style="text-align:center;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">TDS</th>
                   <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Net payout</th>
+                  <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Processed</th>
                 </tr>
               </thead>
               <tbody id="ap-modal-tbody"></tbody>
@@ -1009,9 +1010,12 @@ function buildPartnerGroups() {
 }
 
 // Builds the full chronological interest ledger for ONE asset partner across
-// ALL of their deals, applying TDS once cumulative interest for a given FY
-// crosses that FY's threshold — from the crossing payout onward, not
-// retroactively on payouts already earned before the threshold was hit.
+// ALL of their deals, applying TDS once a FY's TOTAL interest is expected to
+// cross the threshold (a whole-year test, not a slab) — applying it to every
+// payout in that FY, not just the one that tips the cumulative over.
+// Net payout is ALWAYS the system's calculated figure — what finance actually
+// recorded as paid is kept separate (processedAmount) and compared against
+// it, so the two never get silently conflated.
 function buildGroupTdsLedger(group) {
   const entries = [];
   group.deals.forEach(deal => {
@@ -1024,10 +1028,17 @@ function buildGroupTdsLedger(group) {
         payoutNum: row.payoutNum, totalPayouts: row.totalPayouts, dueDate: row.dueDate,
         opening: row.opening, interest: row.interest, principal: row.principal,
         payment: row.payment, closing: row.closing, status: getComputedStatus(payout),
+        processedAmount: payout.amountPaid != null ? payout.amountPaid : null,
       });
     });
   });
   entries.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  const fyTotalInterest = {};
+  entries.forEach(e => {
+    const fy = getFYLabel(e.dueDate);
+    fyTotalInterest[fy] = (fyTotalInterest[fy] || 0) + e.interest;
+  });
 
   const cumByFY = {};
   const rate = getTdsRate();
@@ -1035,10 +1046,57 @@ function buildGroupTdsLedger(group) {
     const fy = getFYLabel(e.dueDate);
     const threshold = getTdsThreshold(fy);
     cumByFY[fy] = (cumByFY[fy] || 0) + e.interest;
-    const tdsApplicable = cumByFY[fy] >= threshold;
+    const fyCrossesThreshold = fyTotalInterest[fy] >= threshold;
+
+    // System-calculated expectation — always the formula, never overridden
+    // by what was actually paid.
+    const tdsApplicable = fyCrossesThreshold;
     const tdsAmount = tdsApplicable ? Math.round(e.interest * rate / 100) : 0;
-    return { ...e, fy, fyThreshold: threshold, cumInterestFY: cumByFY[fy], tdsApplicable, tdsAmount, netPayout: e.payment - tdsAmount };
+    const netPayout = e.payment - tdsAmount;
+
+    // Compare what finance actually recorded as paid against that
+    // expectation. Anything processed without a recorded amount (legacy
+    // rows from before this was tracked) or with a mismatched amount needs
+    // a manual look — nothing gets auto-corrected.
+    const hasProcessedAmount = e.status === "processed" && e.processedAmount != null;
+    const amountMatches = hasProcessedAmount ? Math.abs(e.processedAmount - netPayout) <= 1 : null;
+    const needsReview = e.status === "processed" && (!hasProcessedAmount || !amountMatches);
+
+    return {
+      ...e, fy, fyThreshold: threshold, cumInterestFY: cumByFY[fy],
+      fyTotalInterest: fyTotalInterest[fy], fyCrossesThreshold,
+      tdsApplicable, tdsAmount, netPayout,
+      hasProcessedAmount, amountMatches, needsReview,
+    };
   });
+}
+
+// Shared TDS-cell renderer: red badge if TDS was deducted, amber "review"
+// badge if the FY crossed the threshold but this payout was already paid
+// out before that was known (needs manual finance follow-up), else a dash.
+// TDS badge — always the system's calculated expectation (whole-FY test).
+function tdsCellHtml(e) {
+  if (e.tdsApplicable) {
+    return `<span style="font-size:10px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px">${fmtINR(e.tdsAmount)}</span>`;
+  }
+  return `<span style="color:#ccc;font-size:12px">—</span>`;
+}
+
+// Processed-amount cell — shows what finance actually recorded as paid and
+// whether it matches the system's Net payout. Never auto-corrects; a
+// mismatch (or a processed payout with no recorded amount at all) always
+// shows "Review" so finance can look at it, instead of guessing.
+function processedCellHtml(e) {
+  if (e.status !== "processed") {
+    return `<span style="color:#ccc;font-size:12px">—</span>`;
+  }
+  if (!e.hasProcessedAmount) {
+    return `<span title="Processed before actual amount tracking was added — confirm with finance" style="font-size:10px;font-weight:700;background:#fffbeb;color:#b45309;border:1px solid #fde68a;border-radius:4px;padding:2px 7px">Review</span>`;
+  }
+  if (e.amountMatches) {
+    return `<span style="color:#166534;font-weight:600">${fmtINR(e.processedAmount)}</span>`;
+  }
+  return `<span title="Expected ${fmtINR(e.netPayout)}, but ${fmtINR(e.processedAmount)} was recorded as paid" style="font-size:10px;font-weight:700;background:#fffbeb;color:#b45309;border:1px solid #fde68a;border-radius:4px;padding:2px 7px">Review · ${fmtINR(e.processedAmount)}</span>`;
 }
 
 function rebuildTdsData() {
@@ -1056,6 +1114,23 @@ function getLedgerForDeal(dealId) {
   if (!deal) return [];
   const full = TDS_LEDGERS[normalizePartnerName(deal.name)] || [];
   return full.filter(e => e.dealId === dealId);
+}
+
+// TDS ledger row for a single payout (used on the action card / process form,
+// before the payout has been processed, to show what's expected).
+function getTdsInfoForPayout(p) {
+  const ledger = getLedgerForDeal(p.partnerId);
+  return ledger.find(e => e.payoutNum === p.payoutNum) || null;
+}
+
+// Whether an earlier payout in the SAME financial year for this deal was
+// already paid without TDS being deducted, and still has no actual-paid
+// record confirming it — i.e. a shortfall that this payout may need finance
+// to account for. We surface this instead of auto-adjusting anything.
+function hasPriorUnresolvedShortfall(p, tdsInfo) {
+  if (!tdsInfo) return false;
+  const ledger = getLedgerForDeal(p.partnerId);
+  return ledger.some(e => e.fy === tdsInfo.fy && e.payoutNum < tdsInfo.payoutNum && e.needsReview);
 }
 const TODAY = new Date();
 TODAY.setHours(0, 0, 0, 0);
@@ -1631,14 +1706,45 @@ function payoutActionCardHtml(p, canEdit) {
   const pillClass = s === "overdue" ? "pill-overdue" : "pill-due";
   const cardClass = s === "overdue" ? "overdue" : "due-today";
 
+  const tdsInfo = getTdsInfoForPayout(p);
+  const gross = tdsInfo ? tdsInfo.payment : p.amount;
+  const tdsAmt = tdsInfo && tdsInfo.tdsApplicable ? tdsInfo.tdsAmount : 0;
+  const expectedNet = gross - tdsAmt;
+  const priorShortfall = hasPriorUnresolvedShortfall(p, tdsInfo);
+
+  const breakdownHtml = `
+    <div style="padding:10px 18px 0;font-size:12px;color:var(--muted);display:flex;gap:18px;flex-wrap:wrap">
+      <div>Gross: <strong style="color:var(--ink)">${fmtINR(gross)}</strong></div>
+      ${tdsAmt > 0 ? `<div>TDS (${getTdsRate()}%): <strong style="color:#b91c1c">−${fmtINR(tdsAmt)}</strong></div>` : ""}
+      <div>Net payable: <strong style="color:#166534">${fmtINR(expectedNet)}</strong></div>
+    </div>`;
+
+  const warningHtml = priorShortfall ? `
+    <div style="margin:10px 18px 0;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:12px;color:#92400e">
+      ⚠️ An earlier payout this FY crossed the TDS threshold without TDS deducted. Check with finance whether this payment needs to make up the shortfall.
+    </div>` : "";
+
   let footer;
   if (canEdit) {
     footer = `
+      ${breakdownHtml}
+      ${warningHtml}
       <div class="ac-form" id="form-${p.key}">
         <div class="ac-form-group" style="flex:2">
           <label>Transaction ID <span style="color:var(--danger)">*</span></label>
           <input type="text" id="txn-${p.key}" placeholder="e.g. NEFT2026061200123" />
           <div class="ac-form-error" id="err-${p.key}"></div>
+        </div>
+        <div class="ac-form-group" style="flex:1.3">
+          <label>Amount paid <span style="color:var(--danger)">*</span></label>
+          <input type="number" id="paid-${p.key}" value="${expectedNet}" />
+        </div>
+        <div class="ac-form-group" style="flex:0 0 auto;min-width:0">
+          <label style="visibility:hidden">TDS</label>
+          <div style="display:flex;align-items:center;gap:6px;height:34px;white-space:nowrap">
+            <input type="checkbox" id="tdsded-${p.key}" ${tdsAmt > 0 ? "checked" : ""} style="width:15px;height:15px;margin:0;accent-color:var(--blue)" />
+            <label style="margin:0;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px">TDS deducted</label>
+          </div>
         </div>
         <div class="ac-form-group" style="flex:1.5">
           <label>Note (optional)</label>
@@ -1648,7 +1754,7 @@ function payoutActionCardHtml(p, canEdit) {
       </div>`;
   } else {
     const waitingName = nameForAnyRole(["finance", "finance_admin"]);
-    footer = `<div style="padding:12px 18px;font-size:12px;color:var(--muted)">${waitingName ? `Waiting on: <strong style="color:var(--ink)">${waitingName}</strong>` : "Awaiting processing"}</div>`;
+    footer = `${breakdownHtml}${warningHtml}<div style="padding:12px 18px;font-size:12px;color:var(--muted)">${waitingName ? `Waiting on: <strong style="color:var(--ink)">${waitingName}</strong>` : "Awaiting processing"}</div>`;
   }
 
   return `<div class="action-card ${cardClass}" id="ac-${p.key}">
@@ -1659,7 +1765,7 @@ function payoutActionCardHtml(p, canEdit) {
         <div class="ac-meta"><span class="agreement-badge type-badge-payout">💰 Payout</span> &nbsp;·&nbsp; ${p.afpId||p.partnerId||"No AFP ID"} &nbsp;·&nbsp; Payout #${p.payoutNum} of ${p.totalPayouts||p.tenure} &nbsp;·&nbsp; ${p.payoutModel==="Yearly"?"Yearly":p.payoutModel==="Lump Sum"?"Lump Sum":"Monthly"} &nbsp;·&nbsp; Due ${fmtDate(p.dueDate)}${p.includesPrincipal ? " &nbsp;·&nbsp; <strong style='color:#1d4ed8'>Includes principal return</strong>" : ""}</div>
       </div>
       <div class="ac-right">
-        <div class="ac-amount">${fmtINR(p.amount)}</div>
+        <div class="ac-amount">${fmtINR(expectedNet)}</div>
         <span class="status-pill ${pillClass}">${pillLabel}</span>
       </div>
     </div>
@@ -1819,8 +1925,11 @@ function renderAction() {
 async function submitProcessed(key) {
   const txnInput = document.getElementById("txn-" + key);
   const noteInput = document.getElementById("note-" + key);
+  const paidInput = document.getElementById("paid-" + key);
+  const tdsCheckbox = document.getElementById("tdsded-" + key);
   const errEl = document.getElementById("err-" + key);
   const txnId = txnInput.value.trim();
+  const amountPaid = paidInput ? parseFloat(paidInput.value) : NaN;
 
   if (!txnId) {
     txnInput.classList.add("error");
@@ -1828,12 +1937,28 @@ async function submitProcessed(key) {
     txnInput.focus();
     return;
   }
+  if (!amountPaid || amountPaid <= 0) {
+    if (paidInput) paidInput.classList.add("error");
+    errEl.textContent = "Enter the actual amount paid.";
+    if (paidInput) paidInput.focus();
+    return;
+  }
   txnInput.classList.remove("error");
+  if (paidInput) paidInput.classList.remove("error");
   errEl.textContent = "";
+
+  const tdsDeducted = tdsCheckbox ? tdsCheckbox.checked : false;
 
   const btn = document.querySelector(`#ac-${key} .btn-process`);
   btn.disabled = true;
   btn.textContent = "Saving…";
+
+  // Reconcile what finance entered against what the system expected, so a
+  // mismatch is recorded rather than silently overwritten either way.
+  const payoutForCheck = ALL_PAYOUTS.find(p => p.key === key);
+  const tdsInfo = payoutForCheck ? getTdsInfoForPayout(payoutForCheck) : null;
+  const expectedNet = tdsInfo ? tdsInfo.netPayout : null;
+  const reconciliationFlag = expectedNet != null && Math.abs(expectedNet - amountPaid) > 1;
 
   if (SCRIPT_URL === "YOUR_APPS_SCRIPT_URL_HERE") {
     // demo mode
@@ -1843,9 +1968,13 @@ async function submitProcessed(key) {
       payout.transactionId = txnId;
       payout.markedBy = USERNAME || ROLE;
       payout.markedAt = new Date().toISOString();
+      payout.amountPaid = amountPaid;
+      payout.tdsDeductedActual = tdsDeducted;
+      payout.reconciliationFlag = reconciliationFlag;
     }
+    rebuildTdsData();
     renderAction(); renderStats(); renderAll(); renderPartners(); updateBadges();
-    showToast("Marked as processed ✓");
+    showToast(reconciliationFlag ? "Marked as processed — amount differs from expected, flagged for review ⚠️" : "Marked as processed ✓");
     return;
   }
 
@@ -1856,9 +1985,12 @@ async function submitProcessed(key) {
       transactionId: txnId,
       note: noteInput ? noteInput.value.trim() : "",
       username: USERNAME || "",
+      amountPaid,
+      tdsDeducted,
+      reconciliationFlag,
     });
     if (res.ok) {
-      showToast("Payout marked as processed ✓");
+      showToast(reconciliationFlag ? "Marked as processed — amount differs from expected, flagged for review ⚠️" : "Payout marked as processed ✓");
       await refreshData();
     } else {
       showToast(res.error || "Failed to save", "error");
@@ -1970,7 +2102,7 @@ async function doUndo(key) {
   if (!confirm("Undo this processed payout? (Admin only)")) return;
   if (SCRIPT_URL === "YOUR_APPS_SCRIPT_URL_HERE") {
     const p = ALL_PAYOUTS.find(x => x.key === key);
-    if (p) { delete p.status; delete p.transactionId; delete p.markedBy; }
+    if (p) { delete p.status; delete p.transactionId; delete p.markedBy; delete p.amountPaid; delete p.tdsDeductedActual; delete p.reconciliationFlag; }
     renderAll(); renderAction(); renderStats(); updateBadges();
     return;
   }
@@ -2340,8 +2472,9 @@ function openAssetPartnerModal(key) {
       <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace">${fmtINR(e.interest)}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--muted)">${fmtINR(e.cumInterestFY)}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--muted)">${fmtINR(e.fyThreshold)}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${e.tdsApplicable ? `<span style="font-size:10px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px">${fmtINR(e.tdsAmount)}</span>` : `<span style="color:#ccc;font-size:12px">—</span>`}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${tdsCellHtml(e)}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${fmtINR(e.netPayout)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0f2fa;text-align:right">${processedCellHtml(e)}</td>
     </tr>
   `).join("");
 
@@ -2526,6 +2659,7 @@ function renderModalPayoutsView() {
     <th style="text-align:center;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">TDS</th>
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Net payout</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Status</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Processed</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Transaction ID</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Processed on</th>
     <th style="text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Marked by</th>
@@ -2538,8 +2672,9 @@ function renderModalPayoutsView() {
     const by  = pay.markedBy ? `<span style="font-size:11px;color:var(--muted)">${pay.markedBy}</span>` : `<span style="color:#ccc">—</span>`;
     const rowBg = s === "overdue" ? "background:#fff5f5" : s === "due" ? "background:#fffbeb" : s === "processed" ? "background:#f0fdf4" : "";
     const led = ledgerByNum[pay.payoutNum];
-    const tdsCell = led && led.tdsApplicable ? `<span style="font-size:10px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px">${fmtINR(led.tdsAmount)}</span>` : `<span style="color:#ccc;font-size:12px">—</span>`;
+    const tdsCell = led ? tdsCellHtml(led) : `<span style="color:#ccc;font-size:12px">—</span>`;
     const netCell = led ? fmtINR(led.netPayout) : fmtINR(pay.amount);
+    const processedCell = led ? processedCellHtml(led) : `<span style="color:#ccc;font-size:12px">—</span>`;
     return `<tr style="${rowBg}">
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;font-weight:600">#${pay.payoutNum}/${pay.totalPayouts||pay.tenure}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${fmtDate(pay.dueDate)}</td>
@@ -2547,6 +2682,7 @@ function renderModalPayoutsView() {
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${tdsCell}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${netCell}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa"><span class="status-pill ${pillMap[s]}">${pillLabel[s]}</span></td>
+      <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right">${processedCell}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${txn}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${processedOnModal}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa">${by}</td>
@@ -2567,11 +2703,12 @@ function renderModalAmortView() {
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Payout</th>
     <th style="text-align:center;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">TDS</th>
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Net payout</th>
+    <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Processed</th>
     <th style="text-align:right;padding:8px 12px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;background:var(--mist);border-bottom:1px solid var(--border);white-space:nowrap">Closing balance</th>
   </tr>`;
 
   if (!schedule.length) {
-    document.getElementById("modal-tbody").innerHTML = `<tr><td colspan="9" style="padding:20px 12px;text-align:center;color:var(--muted)">No schedule available.</td></tr>`;
+    document.getElementById("modal-tbody").innerHTML = `<tr><td colspan="10" style="padding:20px 12px;text-align:center;color:var(--muted)">No schedule available.</td></tr>`;
     document.getElementById("modal-tfoot").innerHTML = "";
     return;
   }
@@ -2583,8 +2720,9 @@ function renderModalAmortView() {
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--muted)">${fmtINR(r.interest)}</td>
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace;color:${r.principal>0?'#1d4ed8':'var(--muted)'}">${fmtINR(r.principal)}</td>
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${fmtINR(r.payment)}</td>
-    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${r.tdsApplicable ? `<span style="font-size:10px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:2px 7px">${fmtINR(r.tdsAmount)}</span>` : `<span style="color:#ccc;font-size:12px">—</span>`}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:center">${tdsCellHtml(r)}</td>
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-weight:600">${fmtINR(r.netPayout)}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right">${processedCellHtml(r)}</td>
     <td style="padding:10px 12px;border-bottom:1px solid #f0f2fa;text-align:right;font-family:'JetBrains Mono',monospace">${fmtINR(r.closing)}</td>
   </tr>`).join("");
 
@@ -2600,6 +2738,7 @@ function renderModalAmortView() {
     <td style="padding:10px 12px;text-align:right;font-weight:700">${fmtINR(totalPayment)}</td>
     <td style="padding:10px 12px;text-align:center;font-weight:700;color:#b91c1c">${fmtINR(totalTds)}</td>
     <td style="padding:10px 12px;text-align:right;font-weight:700">${fmtINR(totalNet)}</td>
+    <td style="padding:10px 12px"></td>
     <td style="padding:10px 12px"></td>
   </tr>`;
 }
